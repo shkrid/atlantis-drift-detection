@@ -22,6 +22,5 @@ type Notification interface {
 	ExtraWorkspaceInRemote(ctx context.Context, dir string, workspace string) error
 	MissingWorkspaceInRemote(ctx context.Context, dir string, workspace string) error
 	PlanDrift(ctx context.Context, dir string, workspace string) error
-	// TemporaryError is called when an error occurs but we can't really tell what it means
-	TemporaryError(ctx context.Context, dir string, workspace string, err error) error
+	PlanFailed(ctx context.Context, dir string, workspace string) error
 }

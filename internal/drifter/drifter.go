@@ -2,8 +2,10 @@ package drifter
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"os"
+	"time"
+
 	"github.com/cresta/atlantis-drift-detection/internal/atlantis"
 	"github.com/cresta/atlantis-drift-detection/internal/atlantisgithub"
 	"github.com/cresta/atlantis-drift-detection/internal/notification"
@@ -13,13 +15,12 @@ import (
 	"github.com/cresta/gogithub"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"os"
-	"time"
 )
 
 type Drifter struct {
 	Logger             *zap.Logger
 	Repo               string
+	WorkflowRef        string
 	Cloner             *gogit.Cloner
 	GithubClient       gogithub.GitHub
 	Terraform          *terraform.Client
@@ -94,7 +95,9 @@ func (d *Drifter) drainAndExecute(ctx context.Context, toRun []errFunc) error {
 		return nil
 	})
 	for i := 0; i < d.ParallelRuns; i++ {
+		workerIndex := i
 		eg.Go(func() error {
+			workerCtx := context.WithValue(egctx, atlantis.WorkerIndexKey, workerIndex)
 			for {
 				select {
 				case <-egctx.Done():
@@ -103,7 +106,7 @@ func (d *Drifter) drainAndExecute(ctx context.Context, toRun []errFunc) error {
 					if !ok {
 						return nil
 					}
-					if err := r(egctx); err != nil {
+					if err := r(workerCtx); err != nil {
 						return err
 					}
 				}
@@ -144,17 +147,12 @@ func (d *Drifter) FindDriftedWorkspaces(ctx context.Context, ws atlantis.Directo
 
 				pr, err := d.AtlantisClient.PlanSummary(ctx, &atlantis.PlanSummaryRequest{
 					Repo:      d.Repo,
-					Ref:       "master",
+					Ref:       d.WorkflowRef,
 					Type:      "Github",
 					Dir:       dir,
 					Workspace: workspace,
 				})
 				if err != nil {
-					var tmp atlantis.TemporaryError
-					if errors.As(err, &tmp) && tmp.Temporary() {
-						d.Logger.Warn("Temporary error.  Will try again later.", zap.Error(err))
-						continue
-					}
 					return fmt.Errorf("failed to get plan summary for (%s#%s): %w", dir, workspace, err)
 				}
 				if err := d.ResultCache.StoreDriftCheckResult(ctx, cacheKey, &processedcache.DriftCheckValue{
@@ -171,6 +169,11 @@ func (d *Drifter) FindDriftedWorkspaces(ctx context.Context, ws atlantis.Directo
 				if pr.HasChanges() {
 					if err := d.Notification.PlanDrift(ctx, dir, workspace); err != nil {
 						return fmt.Errorf("failed to notify of plan drift in %s: %w", dir, err)
+					}
+				}
+				if pr.IsFailed() {
+					if err := d.Notification.PlanFailed(ctx, dir, workspace); err != nil {
+						return fmt.Errorf("failed to notify of plan failed in %s: %w", dir, err)
 					}
 				}
 			}
