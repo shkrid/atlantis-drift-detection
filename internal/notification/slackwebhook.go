@@ -11,19 +11,17 @@ import (
 type SlackWebhook struct {
 	WebhookURL string
 	HTTPClient *http.Client
+	Repo       string
 }
 
-func (s *SlackWebhook) TemporaryError(ctx context.Context, dir string, workspace string, err error) error {
-	return s.sendSlackMessage(ctx, fmt.Sprintf("Unknown error in remote\nDirectory: %s\nWorkspace: %s\nError: %s", dir, workspace, err.Error()))
-}
-
-func NewSlackWebhook(webhookURL string, HTTPClient *http.Client) *SlackWebhook {
+func NewSlackWebhook(webhookURL string, HTTPClient *http.Client, repo string) *SlackWebhook {
 	if webhookURL == "" {
 		return nil
 	}
 	return &SlackWebhook{
 		WebhookURL: webhookURL,
 		HTTPClient: HTTPClient,
+		Repo:       repo,
 	}
 }
 
@@ -32,9 +30,7 @@ type SlackWebhookMessage struct {
 }
 
 func (s *SlackWebhook) sendSlackMessage(ctx context.Context, msg string) error {
-	body := SlackWebhookMessage{
-		Text: msg,
-	}
+	body := SlackWebhookMessage{Text: msg}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("failed to marshal slack webhook message: %w", err)
@@ -49,21 +45,25 @@ func (s *SlackWebhook) sendSlackMessage(ctx context.Context, msg string) error {
 		return fmt.Errorf("failed to send slack webhook request: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to send slack webhook request: %w", err)
+		return fmt.Errorf("failed to send slack webhook request: %s", resp.Status)
 	}
 	return nil
 }
 
 func (s *SlackWebhook) ExtraWorkspaceInRemote(ctx context.Context, dir string, workspace string) error {
-	return s.sendSlackMessage(ctx, fmt.Sprintf("Extra workspace in remote\nDirectory: %s\nWorkspace: %s", dir, workspace))
+	return s.sendSlackMessage(ctx, BuildSlackText("⚠️", "Extra workspace in remote", dir, workspace, s.Repo))
 }
 
 func (s *SlackWebhook) MissingWorkspaceInRemote(ctx context.Context, dir string, workspace string) error {
-	return s.sendSlackMessage(ctx, fmt.Sprintf("Missing workspace in remote\nDirectory: %s\nWorkspace: %s", dir, workspace))
+	return s.sendSlackMessage(ctx, BuildSlackText("⚠️", "Missing workspace in remote", dir, workspace, s.Repo))
 }
 
 func (s *SlackWebhook) PlanDrift(ctx context.Context, dir string, workspace string) error {
-	return s.sendSlackMessage(ctx, fmt.Sprintf("Plan Drift workspace in remote\nDirectory: %s\nWorkspace: %s", dir, workspace))
+	return s.sendSlackMessage(ctx, BuildSlackText("🚨", "Plan Drift", dir, workspace, s.Repo))
+}
+
+func (s *SlackWebhook) PlanFailed(ctx context.Context, dir string, workspace string) error {
+	return s.sendSlackMessage(ctx, BuildSlackText("🔥", "Drift plan failed", dir, workspace, s.Repo))
 }
 
 var _ Notification = &SlackWebhook{}
