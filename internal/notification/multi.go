@@ -6,9 +6,9 @@ type Multi struct {
 	Notifications []Notification
 }
 
-func (m *Multi) TemporaryError(ctx context.Context, dir string, workspace string, err error) error {
+func (m *Multi) PlanFailed(ctx context.Context, dir string, workspace string) error {
 	for _, n := range m.Notifications {
-		if err := n.TemporaryError(ctx, dir, workspace, err); err != nil {
+		if err := n.PlanFailed(ctx, dir, workspace); err != nil {
 			return err
 		}
 	}

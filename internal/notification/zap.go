@@ -10,8 +10,8 @@ type Zap struct {
 	Logger *zap.Logger
 }
 
-func (I *Zap) TemporaryError(_ context.Context, dir string, workspace string, err error) error {
-	I.Logger.Error("Unknown error in remote", zap.String("dir", dir), zap.String("workspace", workspace), zap.Error(err))
+func (I *Zap) PlanFailed(_ context.Context, dir string, workspace string) error {
+	I.Logger.Warn("Drift plan failed", zap.String("dir", dir), zap.String("workspace", workspace))
 	return nil
 }
 

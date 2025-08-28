@@ -31,9 +31,19 @@ type Workflow struct {
 	directoriesDone map[string]struct{}
 }
 
-func (w *Workflow) TemporaryError(_ context.Context, _ string, _ string, _ error) error {
-	// Ignored
-	return nil
+func (w *Workflow) PlanFailed(ctx context.Context, dir string, _ string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.directoriesDone == nil {
+		w.directoriesDone = make(map[string]struct{})
+	}
+	if _, ok := w.directoriesDone[dir]; ok {
+		return nil
+	}
+	w.directoriesDone[dir] = struct{}{}
+	return w.GhClient.TriggerWorkflow(ctx, w.WorkflowOwner, w.WorkflowRepo, w.WorkflowId, w.WorkflowRef, map[string]string{
+		"directory": dir,
+	})
 }
 
 func (w *Workflow) ExtraWorkspaceInRemote(_ context.Context, _ string, _ string) error {

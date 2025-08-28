@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cresta/atlantis-drift-detection/internal/atlantis"
@@ -16,25 +17,29 @@ import (
 	"github.com/cresta/gogithub"
 	"github.com/joho/godotenv"
 
+	"github.com/joeshaw/envdecode"
 	// Empty import allows pinning to version atlantis uses
 	_ "github.com/nlopes/slack"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
-import "github.com/joeshaw/envdecode"
 
 type config struct {
 	Repo               string        `env:"REPO,required"`
+	RepoBranch         string        `env:"BRANCH,default=master"`
 	AtlantisHostname   string        `env:"ATLANTIS_HOST,required"`
 	AtlantisToken      string        `env:"ATLANTIS_TOKEN,required"`
 	DirectoryWhitelist []string      `env:"DIRECTORY_WHITELIST"`
 	SlackWebhookURL    string        `env:"SLACK_WEBHOOK_URL"`
-	SkipWorkspaceCheck bool          `env:"SKIP_WORKSPACE_CHECK"`
+	SlackToken         string        `env:"SLACK_TOKEN"`
+	SlackChannel       string        `env:"SLACK_CHANNEL"`
+	SkipWorkspaceCheck bool          `env:"SKIP_WORKSPACE_CHECK,default=true"`
 	ParallelRuns       int           `env:"PARALLEL_RUNS"`
 	DynamodbTable      string        `env:"DYNAMODB_TABLE"`
 	CacheValidDuration time.Duration `env:"CACHE_VALID_DURATION,default=24h"`
 	WorkflowOwner      string        `env:"WORKFLOW_OWNER"`
 	WorkflowRepo       string        `env:"WORKFLOW_REPO"`
-	WorkflowId         string        `env:"WORKFLOW_ID"`
+	WorkflowId         string        `env:"WORKFLOW_ID,default=atlantis-drift-detection.yaml"`
 	WorkflowRef        string        `env:"WORKFLOW_REF"`
 }
 
@@ -74,10 +79,23 @@ func (z *zapGogitLogger) Info(_ context.Context, msg string, strings map[string]
 
 var _ gogit.Logger = (*zapGogitLogger)(nil)
 
+func getLogLevel() zapcore.Level {
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		return zap.DebugLevel
+	case "warn":
+		return zap.WarnLevel
+	case "error":
+		return zap.ErrorLevel
+	default:
+		return zap.InfoLevel
+	}
+}
+
 func main() {
 	ctx := context.Background()
 	zapCfg := zap.NewProductionConfig()
-	zapCfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+	zapCfg.Level = zap.NewAtomicLevelAt(getLogLevel())
 	logger, err := zapCfg.Build(zap.AddCaller())
 	if err != nil {
 		panic(err)
@@ -89,6 +107,14 @@ func main() {
 	if err := envdecode.Decode(&cfg); err != nil {
 		logger.Panic("failed to decode config", zap.Error(err))
 	}
+	if cfg.WorkflowOwner == "" && cfg.WorkflowRepo == "" {
+		if owner, repo, found := strings.Cut(cfg.Repo, "/"); found {
+			cfg.WorkflowOwner, cfg.WorkflowRepo = owner, repo
+		}
+	}
+	if cfg.WorkflowRef == "" {
+		cfg.WorkflowRef = cfg.RepoBranch
+	}
 	cloner := &gogit.Cloner{
 		Logger: &zapGogitLogger{logger},
 	}
@@ -97,9 +123,13 @@ func main() {
 			&notification.Zap{Logger: logger.With(zap.String("notification", "true"))},
 		},
 	}
-	if slackClient := notification.NewSlackWebhook(cfg.SlackWebhookURL, http.DefaultClient); slackClient != nil {
+	if slackClient := notification.NewSlackWebhook(cfg.SlackWebhookURL, http.DefaultClient, cfg.Repo); slackClient != nil {
 		logger.Info("setting up slack webhook notification")
 		notif.Notifications = append(notif.Notifications, slackClient)
+	}
+	if slackAPI := notification.NewSlackAPI(cfg.SlackToken, cfg.SlackChannel, cfg.Repo, http.DefaultClient); slackAPI != nil {
+		logger.Info("setting up slack api notification")
+		notif.Notifications = append(notif.Notifications, slackAPI)
 	}
 	var existingConfig *gogithub.NewGQLClientConfig
 	if os.Getenv("GITHUB_TOKEN") != "" {
@@ -130,10 +160,12 @@ func main() {
 		DirectoryWhitelist: cfg.DirectoryWhitelist,
 		Logger:             logger.With(zap.String("drifter", "true")),
 		Repo:               cfg.Repo,
+		Ref:        		cfg.RepoBranch,
 		AtlantisClient: &atlantis.Client{
 			AtlantisHostname: cfg.AtlantisHostname,
 			Token:            cfg.AtlantisToken,
 			HTTPClient:       http.DefaultClient,
+			Logger:           logger.With(zap.String("component", "atlantis-client")),
 		},
 		ParallelRuns:       cfg.ParallelRuns,
 		ResultCache:        cache,
